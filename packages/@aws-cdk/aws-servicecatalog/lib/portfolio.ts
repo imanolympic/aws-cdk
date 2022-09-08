@@ -1,6 +1,7 @@
 import * as iam from '@aws-cdk/aws-iam';
 import * as sns from '@aws-cdk/aws-sns';
 import * as cdk from '@aws-cdk/core';
+import { IBucket } from '@aws-cdk/aws-s3';
 import { Construct } from 'constructs';
 import { MessageLanguage } from './common';
 import {
@@ -105,7 +106,7 @@ export interface IPortfolio extends cdk.IResource {
    * @param product A service catalog product.
    * @param options options for the constraint.
    */
-  constrainCloudFormationParameters(product:IProduct, options: CloudFormationRuleConstraintOptions): void;
+  constrainCloudFormationParameters(product: IProduct, options: CloudFormationRuleConstraintOptions): void;
 
   /**
    * Force users to assume a certain role when launching a product.
@@ -155,6 +156,8 @@ abstract class PortfolioBase extends cdk.Resource implements IPortfolio {
   public abstract readonly portfolioArn: string;
   public abstract readonly portfolioId: string;
   private readonly associatedPrincipals: Set<string> = new Set();
+  private readonly assetBuckets: Set<IBucket> = new Set<IBucket>();
+  private readonly sharedAccounts: String[] = [];
 
   public giveAccessToRole(role: iam.IRole): void {
     this.associatePrincipal(role.roleArn, role.node.addr);
@@ -169,11 +172,23 @@ abstract class PortfolioBase extends cdk.Resource implements IPortfolio {
   }
 
   public addProduct(product: IProduct): void {
+    if (product.assetBucket) {
+      this.assetBuckets.add(product.assetBucket);
+      if (this.sharedAccounts.length > 0) {
+        product.assetBucket.grantRead(
+          new iam.CompositePrincipal(...this.sharedAccounts.map(account => new iam.AccountPrincipal(account))),
+        );
+      }
+    };
     AssociationManager.associateProductWithPortfolio(this, product, undefined);
   }
 
   public shareWithAccount(accountId: string, options: PortfolioShareOptions = {}): void {
     const hashId = this.generateUniqueHash(accountId);
+    this.sharedAccounts.push(accountId);
+    for (const bucket of this.assetBuckets) {
+      bucket.grantRead(new iam.AccountPrincipal(accountId));
+    }
     new CfnPortfolioShare(this, `PortfolioShare${hashId}`, {
       portfolioId: this.portfolioId,
       accountId: accountId,
